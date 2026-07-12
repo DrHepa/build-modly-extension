@@ -1,0 +1,126 @@
+"""Modly Python process entry scaffold."""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+import time
+import traceback
+import uuid
+from pathlib import Path
+
+
+EXTENSION_ID = @@EXTENSION_ID_PY@@
+EXPECTED_NODE_ID = @@NODE_ID_PY@@
+PUBLIC_ERRORS = {
+    "invalid_request": (
+        "Invalid request. Send one JSON object with object-valued input and params."
+    ),
+    "unsupported_node": (
+        "This processor does not support the requested node. Reinstall or update "
+        "the extension so its manifest and processor match."
+    ),
+    "invalid_paths": (
+        "Invalid workspace configuration. workspaceDir and tempDir must be absolute paths."
+    ),
+    "invalid_input": (
+        "The input is missing or invalid. Connect a supported input and try again."
+    ),
+    "invalid_params": (
+        "One or more parameters are invalid. Review the node settings and try again."
+    ),
+    "invalid_result": (
+        "The processor did not produce a supported result. Check the extension logs "
+        "or reinstall the extension."
+    ),
+    "processing_failed": (
+        "Processing failed. Verify the input and settings, then check the extension "
+        "logs before retrying."
+    ),
+}
+
+
+class PublicProcessError(Exception):
+    """Select a reviewed message that is safe to return over the public protocol."""
+
+    def __init__(self, code: str) -> None:
+        if code not in PUBLIC_ERRORS:
+            raise ValueError("Unknown public process error code")
+        self.code = code
+        super().__init__(code)
+
+
+def emit(message: dict) -> None:
+    sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def progress(percent: int, label: str) -> None:
+    emit({"type": "progress", "percent": max(0, min(100, int(percent))), "label": label})
+
+
+def log(message: str) -> None:
+    emit({"type": "log", "message": str(message)})
+
+
+def output_path(workspace_dir: Path, requested_name: str = "") -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", requested_name).strip("._-")
+    stem = safe or f"{EXTENSION_ID}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    out_dir = workspace_dir / "Workflows"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return (out_dir / f"{stem}.glb").resolve()
+
+
+def run_node(input_data: dict, params: dict, workspace_dir: Path, temp_dir: Path) -> dict:
+    # REPLACE_ME: validate the declared @@INPUT_TYPE@@ input, normalize all
+    # parameters, implement the transform, and return filePath or text. Raise
+    # PublicProcessError("invalid_input") or ("invalid_params") for client errors.
+    _ = (input_data, params, workspace_dir, temp_dir)
+    raise NotImplementedError("REPLACE_ME: implement @@NODE_ID@@")
+
+
+def main() -> int:
+    raw = sys.stdin.readline()
+    if not raw:
+        raise PublicProcessError("invalid_request")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise PublicProcessError("invalid_request") from exc
+    if not isinstance(payload, dict):
+        raise PublicProcessError("invalid_request")
+    input_data = payload.get("input") or {}
+    params = payload.get("params") or {}
+    if not isinstance(input_data, dict) or not isinstance(params, dict):
+        raise PublicProcessError("invalid_request")
+    node_id = input_data.get("nodeId") or payload.get("nodeId") or ""
+    if node_id != EXPECTED_NODE_ID:
+        raise PublicProcessError("unsupported_node")
+
+    workspace_dir = Path(str(payload.get("workspaceDir") or "")).expanduser()
+    temp_dir = Path(str(payload.get("tempDir") or "")).expanduser()
+    if not workspace_dir.is_absolute() or not temp_dir.is_absolute():
+        raise PublicProcessError("invalid_paths")
+
+    progress(5, "Validated input")
+    result = run_node(input_data, params, workspace_dir, temp_dir)
+    if not isinstance(result, dict) or not ({"filePath", "text"} & result.keys()):
+        raise PublicProcessError("invalid_result")
+    progress(100, "Done")
+    emit({"type": "done", "result": result})
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        traceback.print_exc(file=sys.stderr)
+        message = (
+            PUBLIC_ERRORS[exc.code]
+            if isinstance(exc, PublicProcessError)
+            else PUBLIC_ERRORS["processing_failed"]
+        )
+        emit({"type": "error", "message": message})
+        raise SystemExit(1)

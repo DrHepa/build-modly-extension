@@ -1,0 +1,165 @@
+"""Install an isolated Modly extension runtime.
+
+Modly's current installer passes one JSON argument. Legacy hosts pass
+<python_exe> <ext_dir> <gpu_sm> [cuda_version]. Model weights are deliberately
+not downloaded here; Modly's Models UI owns them.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+DEPENDENCIES = @@PIP_DEPENDENCIES@@
+VERIFY_IMPORTS = ["REPLACE_ME_WITH_REQUIRED_IMPORTS"]
+BOOTSTRAP_PACKAGES = ["pip==25.1.1", "setuptools==80.9.0", "wheel==0.45.1"]
+INTERPRETER_PROBE = """
+import json
+import platform
+import struct
+import sys
+import sysconfig
+
+print(json.dumps({
+    "implementation": sys.implementation.name,
+    "version": list(sys.version_info[:2]),
+    "cache_tag": sys.implementation.cache_tag,
+    "abiflags": getattr(sys, "abiflags", ""),
+    "soabi": sysconfig.get_config_var("SOABI"),
+    "platform": sysconfig.get_platform().lower(),
+    "machine": platform.machine().lower(),
+    "pointer_bits": struct.calcsize("P") * 8,
+}, sort_keys=True))
+"""
+
+
+def log(message: str) -> None:
+    print(f"[setup] {message}", flush=True)
+
+
+def parse_args(argv: list[str]) -> dict:
+    if len(argv) == 2:
+        payload = json.loads(argv[1])
+        if not isinstance(payload, dict):
+            raise ValueError("Modly setup payload must be a JSON object")
+        return payload
+    if len(argv) >= 4:
+        return {
+            "python_exe": argv[1],
+            "ext_dir": argv[2],
+            "gpu_sm": int(argv[3]),
+            "cuda_version": int(argv[4]) if len(argv) >= 5 else 0,
+            "accelerator": "cuda" if int(argv[3]) > 0 else "cpu",
+            "platform": sys.platform,
+            "arch": platform.machine(),
+        }
+    raise ValueError("Expected one Modly JSON argument or legacy positional arguments")
+
+
+def venv_python(venv: Path) -> Path:
+    return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def run(command: list[str]) -> None:
+    log("Running: " + " ".join(command[:4]) + (" …" if len(command) > 4 else ""))
+    subprocess.run(command, check=True)
+
+
+def interpreter_fingerprint(python: Path) -> dict[str, object]:
+    completed = subprocess.run(
+        [str(python), "-I", "-S", "-c", INTERPRETER_PROBE],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    fingerprint = json.loads(completed.stdout)
+    if not isinstance(fingerprint, dict):
+        raise RuntimeError("Python interpreter probe returned an invalid result")
+    return fingerprint
+
+
+def remove_venv(venv: Path) -> None:
+    if venv.is_symlink() or venv.is_file():
+        venv.unlink()
+    elif venv.exists():
+        shutil.rmtree(venv)
+
+
+def main() -> int:
+    payload = parse_args(sys.argv)
+    host_python = Path(str(payload["python_exe"])).expanduser().resolve()
+    ext_dir = Path(str(payload.get("ext_dir") or ROOT)).expanduser().resolve()
+    if ext_dir != ROOT.resolve():
+        raise ValueError(f"ext_dir does not resolve to this extension: {ext_dir}")
+    if not host_python.is_file():
+        raise FileNotFoundError(f"Modly Python not found: {host_python}")
+
+    gpu_sm = int(payload.get("gpu_sm", 0))
+    cuda_version = int(payload.get("cuda_version", 0))
+    accelerator = str(payload.get("accelerator") or ("cuda" if gpu_sm else "cpu"))
+    log(
+        f"platform={payload.get('platform', sys.platform)} "
+        f"arch={payload.get('arch', platform.machine())} "
+        f"accelerator={accelerator} gpu_sm={gpu_sm} cuda_version={cuda_version}"
+    )
+
+    host_fingerprint = interpreter_fingerprint(host_python)
+    venv = ext_dir / "venv"
+    python = venv_python(venv)
+    if venv.exists() or venv.is_symlink():
+        reusable = python.is_file()
+        if reusable:
+            try:
+                reusable = interpreter_fingerprint(python) == host_fingerprint
+            except (OSError, subprocess.SubprocessError, ValueError, RuntimeError):
+                reusable = False
+        if not reusable:
+            log("Existing virtual environment is incomplete or ABI-incompatible; recreating it")
+            remove_venv(venv)
+
+    if not python.is_file():
+        log(f"Creating virtual environment at {venv}")
+        run([str(host_python), "-m", "venv", str(venv)])
+    if not python.is_file():
+        raise RuntimeError("Virtual environment creation did not produce a Python executable")
+    if interpreter_fingerprint(python) != host_fingerprint:
+        remove_venv(venv)
+        raise RuntimeError("Created virtual environment is not ABI-compatible with Modly Python")
+
+    run([str(python), "-m", "pip", "install", "--upgrade", *BOOTSTRAP_PACKAGES])
+
+    # REPLACE_ME: select and pin the correct accelerator/native dependency lane
+    # from the audited platform matrix before installing the remaining packages.
+    if DEPENDENCIES:
+        run([str(python), "-m", "pip", "install", *DEPENDENCIES])
+
+    if any(name.startswith("REPLACE_ME") for name in VERIFY_IMPORTS):
+        raise RuntimeError("REPLACE_ME: define VERIFY_IMPORTS for the required runtime")
+    verify = "; ".join(
+        [
+            "import importlib",
+            f"names = {VERIFY_IMPORTS!r}",
+            "[importlib.import_module(name) for name in names]",
+            "print('required imports: OK')",
+        ]
+    )
+    run([str(python), "-c", verify])
+    run([str(python), "-m", "pip", "check"])
+    log("Setup complete. Model weights were not downloaded.")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        log(f"ERROR: {exc}")
+        raise SystemExit(1)

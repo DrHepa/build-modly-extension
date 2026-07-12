@@ -1,0 +1,72 @@
+# @@EXTENSION_NAME@@ — Modly Extension
+
+@@DESCRIPTION@@
+
+## Status
+
+REPLACE_ME: State the highest completed validation tier and list each tested OS, architecture, GPU, driver, Python and runtime version. Do not claim untested compatibility.
+
+## Features
+
+- Modly node: `@@NODE_ID@@` (`@@INPUT_TYPE@@` → `@@OUTPUT_TYPE@@`)
+- UI-managed model weights
+- Isolated Python environment
+- Progress, cancellation and unload support
+
+## Installation
+
+1. Open Modly and go to **Extensions/Models**.
+2. Select **Install from GitHub**.
+3. Paste `@@SOURCE_URL@@` and wait for setup to finish.
+4. Find **@@EXTENSION_NAME@@** and download its model node from the UI.
+5. If setup is interrupted or dependencies change, use **Repair**.
+
+`setup.py` installs runtime dependencies only. It never downloads model weights.
+
+## Model weights
+
+- Hugging Face repository: `@@HF_REPO@@`
+- Download sentinel: `@@DOWNLOAD_CHECK@@`
+- Modly location: `models/@@EXTENSION_ID@@/@@NODE_ID@@/`
+- Weight license/use restrictions: @@WEIGHTS_LICENSE@@
+
+The runtime loads weights only from the directory supplied by Modly and does not fall back to a global cache or network download.
+
+## Usage
+
+REPLACE_ME: Describe the expected input, the shortest successful workflow, and the generated artifact.
+
+## Parameters
+
+REPLACE_ME: Document every manifest parameter, default, valid range/options, VRAM/performance effect, and interaction.
+
+## Outputs
+
+REPLACE_ME: Document the primary GLB and any sidecars, including viewer/workflow compatibility.
+
+## Requirements and compatibility
+
+REPLACE_ME: Give measured VRAM/RAM/storage requirements and a verified/experimental/unsupported platform matrix.
+
+## Limitations
+
+REPLACE_ME: State model, input, quality, cancellation and platform limitations.
+
+## Troubleshooting
+
+- **Missing weights:** download `@@NODE_ID@@` from Modly's Extensions/Models page.
+- **Environment error:** run **Repair**, then inspect Modly's extension setup log.
+- **Out of memory:** use the documented lowest-memory settings and close other GPU workloads.
+
+REPLACE_ME: Add model-specific failures and exact recovery steps.
+
+## Upstream and credits
+
+- Modly extension integration: @@AUTHOR@@
+- Extension repository: [@@SOURCE_URL@@](@@SOURCE_URL@@)
+- Upstream project: [@@UPSTREAM_URL@@](@@UPSTREAM_URL@@), pinned to `REPLACE_ME_WITH_COMMIT`
+- Host application: [Modly](https://github.com/lightningpixel/modly) by Lightning Pixel
+
+## License
+
+The extension wrapper is licensed under @@WRAPPER_LICENSE@@. Upstream code is licensed under @@UPSTREAM_LICENSE@@. Model weights are licensed/restricted as follows: @@WEIGHTS_LICENSE@@. See `THIRD_PARTY_NOTICES.md` and the upstream model card; the wrapper license does not replace upstream or weight terms.

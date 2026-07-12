@@ -1,0 +1,11 @@
+interface:
+  display_name: "Build Modly Extensions"
+  short_description: "Build, repair, and audit Modly extensions"
+  default_prompt: "Use $build-modly-extension to build, repair, audit, and validate a complete Modly model or process extension."
+policy:
+  products:
+  - "chatgpt"
+  - "codex"
+  - "api"
+  - "atlas"
+  allow_implicit_invocation: true

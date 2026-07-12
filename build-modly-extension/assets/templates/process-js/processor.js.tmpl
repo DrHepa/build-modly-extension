@@ -1,0 +1,21 @@
+'use strict'
+
+const fs = require('fs')
+const path = require('path')
+const EXPECTED_NODE_ID = @@NODE_ID_JS@@
+
+module.exports = async function processNode(input, params, context) {
+  if (context.nodeId && context.nodeId !== EXPECTED_NODE_ID) {
+    throw new Error(`Unsupported nodeId: ${context.nodeId}`)
+  }
+  context.progress(5, 'Validated input')
+
+  // REPLACE_ME: validate the @@INPUT_TYPE@@ input, normalize every parameter,
+  // implement the transform, and write durable output under
+  // path.join(context.workspaceDir, 'Workflows').
+  void fs
+  void path
+  void input
+  void params
+  throw new Error(`REPLACE_ME: implement ${EXPECTED_NODE_ID}`)
+}

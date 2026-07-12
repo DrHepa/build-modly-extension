@@ -1,0 +1,59 @@
+# @@EXTENSION_NAME@@ — Modly Process Extension
+
+@@DESCRIPTION@@
+
+## Status
+
+REPLACE_ME: State the highest completed validation tier and exact tested platforms.
+
+## Features
+
+- Modly node: `@@NODE_ID@@` (`@@INPUT_TYPE@@` → `@@OUTPUT_TYPE@@`)
+- Isolated Python environment
+- Structured progress and errors through Modly's process protocol
+
+## Installation
+
+1. Open Modly and go to **Extensions/Models**.
+2. Select **Install from GitHub**.
+3. Paste `@@SOURCE_URL@@` and wait for setup to finish.
+4. Add **@@NODE_NAME@@** to a workflow.
+5. Use **Repair** if the environment setup is interrupted.
+
+## Usage
+
+REPLACE_ME: Describe the required input, workflow wiring, and shortest successful run.
+
+## Parameters
+
+REPLACE_ME: Document every parameter, default, range/option, conditional visibility and runtime effect.
+
+## Outputs
+
+REPLACE_ME: Document the returned file/text, workspace location and any sidecars.
+
+## Requirements and compatibility
+
+REPLACE_ME: List Python/native dependencies and a truthful platform matrix.
+
+## Limitations
+
+REPLACE_ME: State unsupported inputs, scale limits, expected quality tradeoffs and cancellation limits.
+
+## Troubleshooting
+
+- **Environment error:** run **Repair** and inspect the extension setup log.
+- **Input rejected:** verify that the upstream workflow node produces the declared `@@INPUT_TYPE@@` artifact.
+
+REPLACE_ME: Add process-specific failures and recovery steps.
+
+## Upstream and credits
+
+- Modly extension integration: @@AUTHOR@@
+- Extension repository: [@@SOURCE_URL@@](@@SOURCE_URL@@)
+- Upstream project: [@@UPSTREAM_URL@@](@@UPSTREAM_URL@@), pinned to `REPLACE_ME_WITH_COMMIT`
+- Host application: [Modly](https://github.com/lightningpixel/modly) by Lightning Pixel
+
+## License
+
+The extension wrapper is licensed under @@WRAPPER_LICENSE@@. Upstream code is licensed under @@UPSTREAM_LICENSE@@. See `THIRD_PARTY_NOTICES.md`; upstream and dependency terms remain in force.

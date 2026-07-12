@@ -1,0 +1,116 @@
+name: Validate skill distribution
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check bundled files and Python syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("build-modly-extension")
+          skill = (root / "SKILL.md").read_text(encoding="utf-8")
+          assert re.search(r"(?m)^name: build-modly-extension$", skill)
+          assert (root / "LICENSE").is_file()
+          assert (root / "TEMPLATE_OUTPUT_EXCEPTION.md").is_file()
+
+          missing = []
+          for relative in set(re.findall(r"\$SKILL_DIR/([A-Za-z0-9_./-]+)", skill)):
+              if not (root / relative).exists():
+                  missing.append(relative)
+          assert not missing, f"Missing bundled resources: {missing}"
+
+          for path in (root / "scripts").glob("*.py"):
+              compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          print("Skill package and Python syntax: PASS")
+          PY
+
+      - name: Check bundled command entry points
+        run: |
+          export SKILL_DIR="$PWD/build-modly-extension"
+          python "$SKILL_DIR/scripts/scaffold_extension.py" --help >/dev/null
+          python "$SKILL_DIR/scripts/validate_extension.py" --help >/dev/null
+          python "$SKILL_DIR/scripts/test_process_protocol.py" --help >/dev/null
+
+      - name: Generate all extension routes from outside the skill directory
+        run: |
+          export SKILL_DIR="$PWD/build-modly-extension"
+          cd "$RUNNER_TEMP"
+
+          python "$SKILL_DIR/scripts/scaffold_extension.py" \
+            --kind model \
+            --id ci-model \
+            --name "CI Model" \
+            --author "CI" \
+            --source "https://github.com/example/ci-model" \
+            --description "CI model scaffold." \
+            --upstream "https://github.com/example/upstream" \
+            --license-name MIT \
+            --upstream-license MIT \
+            --weights-license MIT \
+            --hf-repo "example/model" \
+            --download-check "model.safetensors" \
+            --output-dir "$RUNNER_TEMP/model"
+
+          python "$SKILL_DIR/scripts/scaffold_extension.py" \
+            --kind process-python \
+            --id ci-python-process \
+            --name "CI Python Process" \
+            --author "CI" \
+            --source "https://github.com/example/ci-python-process" \
+            --description "CI Python process scaffold." \
+            --upstream "https://github.com/example/upstream" \
+            --license-name MIT \
+            --upstream-license MIT \
+            --input mesh \
+            --output text \
+            --output-dir "$RUNNER_TEMP/python-process"
+
+          python "$SKILL_DIR/scripts/scaffold_extension.py" \
+            --kind process-js \
+            --id ci-js-process \
+            --name "CI JavaScript Process" \
+            --author "CI" \
+            --source "https://github.com/example/ci-js-process" \
+            --description "CI JavaScript process scaffold." \
+            --upstream "https://github.com/example/upstream" \
+            --license-name MIT \
+            --upstream-license MIT \
+            --input text \
+            --output text \
+            --output-dir "$RUNNER_TEMP/js-process"
+
+          python - <<'PY'
+          from pathlib import Path
+          import os
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          for path in (
+              root / "model" / "generator.py",
+              root / "model" / "setup.py",
+              root / "python-process" / "processor.py",
+              root / "python-process" / "setup.py",
+          ):
+              compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          print("Generated Python syntax: PASS")
+          PY
+          node --check "$RUNNER_TEMP/js-process/processor.js"
