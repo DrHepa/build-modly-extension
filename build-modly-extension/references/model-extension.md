@@ -28,6 +28,12 @@ Import `BaseGenerator`, `GenerationCancelled`, and optional helpers from `servic
 - Redirect unavoidable caches beneath `self.model_dir/_cache` or a documented extension-owned runtime directory; do not use the user's default Hugging Face cache.
 - Never call download APIs from `load()` or `generate()` for a UI-managed extension.
 
+Under the legacy contract, all node files are directly beneath
+`self.model_dir`. Under the next-release `model_sources` contract, resolve each
+source from `self.model_dir/<destination>` (`.` means `self.model_dir`). Verify
+all declared check files before constructing the pipeline. See
+`model-sources-contract.md` for the exact schema and migration procedure.
+
 If upstream only accepts a repo id and downloads implicitly, adapt or patch the loader to accept a local snapshot. Do not claim the UI manages weights while the runtime still fetches missing files.
 
 ## Lifecycle
@@ -54,7 +60,11 @@ For upstream Modly v0.4, return a viewer-compatible GLB mesh. Preserve useful si
 
 The same generator class is instantiated once per node with a different `model_dir`. The runner selects node metadata from the trailing model-directory name. Keep node behavior deterministic from the injected metadata or from a stable node-to-config mapping.
 
-Do not expect node A to see weights downloaded for node B. If nodes intentionally share identical weights, duplication is the current default UI behavior unless the target host implements a shared owner/symlink contract.
+Do not expect node A to see weights downloaded for node B. `model_sources`
+groups multiple repositories for one node; it does not share weights between
+nodes. If nodes intentionally use identical weights, each node still owns its
+own model directory unless the target host separately proves a shared-storage
+contract.
 
 ## Testing
 

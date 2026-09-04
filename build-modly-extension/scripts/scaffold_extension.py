@@ -12,6 +12,7 @@ import json
 import keyword
 import re
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -24,12 +25,16 @@ GITHUB_REPO_RE = re.compile(
     r"[A-Za-z0-9._-]+$"
 )
 HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+MODEL_SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?$")
 NPM_PACKAGE_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*$")
 PINNED_COMMIT_RE = re.compile(r"@[0-9a-fA-F]{40}(?=$|[?#])|@[0-9a-fA-F]{64}(?=$|[?#])")
 SHA256_RE = re.compile(r"(?:#|&)sha256=[0-9a-fA-F]{64}(?:$|&)")
 TEMPLATE_TOKEN_RE = re.compile(r"@@([A-Z0-9_]+)@@")
 PORTABLE_RELATIVE_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+WINDOWS_DEVICE_RE = re.compile(
+    r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$", re.IGNORECASE
+)
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = SKILL_ROOT / "assets" / "templates"
 
@@ -43,6 +48,26 @@ def safe_id(value: str, label: str) -> str:
     if not ID_RE.fullmatch(value) or value in {".", ".."}:
         die(f"{label} must match {ID_RE.pattern!r}: {value!r}")
     return value
+
+
+def safe_model_source_id(value: str, label: str) -> str:
+    if (
+        value != value.strip()
+        or not MODEL_SOURCE_ID_RE.fullmatch(value)
+        or value in {".", ".."}
+        or value.endswith((".", " "))
+        or WINDOWS_DEVICE_RE.fullmatch(value)
+    ):
+        die(f"{label} must be a safe portable identifier: {value!r}")
+    return value
+
+
+def is_safe_model_repo_id(value: str) -> bool:
+    parts = value.split("/")
+    return len(parts) <= 2 and all(
+        part not in {"", ".", ".."} and bool(MODEL_SOURCE_ID_RE.fullmatch(part))
+        for part in parts
+    )
 
 
 def clean_single_line(value: str, label: str) -> str:
@@ -83,8 +108,16 @@ def absolute_https_url(value: str, label: str) -> str:
     return value
 
 
-def safe_relative_path(value: str, label: str, *, allow_trailing_slash: bool = False) -> str:
+def safe_relative_path(
+    value: str,
+    label: str,
+    *,
+    allow_trailing_slash: bool = False,
+    allow_dot: bool = False,
+) -> str:
     value = clean_single_line(value, label)
+    if allow_dot and value == ".":
+        return value
     candidate = value[:-1] if allow_trailing_slash and value.endswith("/") else value
     if (
         not candidate
@@ -95,9 +128,121 @@ def safe_relative_path(value: str, label: str, *, allow_trailing_slash: bool = F
     ):
         die(f"{label} must be a portable relative POSIX path")
     path = PurePosixPath(candidate)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in candidate.split("/")):
+    if path.is_absolute() or any(
+        part in {"", ".", ".."}
+        or part.endswith((".", " "))
+        or WINDOWS_DEVICE_RE.fullmatch(part)
+        for part in candidate.split("/")
+    ):
         die(f"{label} must not contain empty, dot, or parent segments")
     return value
+
+
+def safe_revision(value: str, label: str) -> str:
+    if value != value.strip():
+        die(f"{label} must not have leading or trailing whitespace")
+    value = clean_single_line(value, label)
+    if value.startswith("/") or "\\" in value or "\0" in value:
+        die(f"{label} must be a safe Hugging Face revision")
+    if any(part in {"", ".", ".."} for part in value.split("/")):
+        die(f"{label} must not contain empty, dot, or parent segments")
+    return value
+
+
+def parse_model_sources(values: list[str]) -> list[dict[str, object]]:
+    allowed = {
+        "id", "provider", "repo_id", "revision", "destination",
+        "include_prefixes", "skip_prefixes", "checks",
+    }
+    sources: list[dict[str, object]] = []
+    aliases: set[str] = set()
+    check_targets: dict[str, str] = {}
+    for index, raw in enumerate(values):
+        label = f"model-source[{index}]"
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            die(f"{label} must be a JSON object: {exc.msg}")
+        if not isinstance(value, dict):
+            die(f"{label} must be a JSON object")
+        unknown = sorted(set(value) - allowed)
+        if unknown:
+            die(f"{label} has unsupported fields: {', '.join(unknown)}")
+        raw_source_id = value.get("id")
+        if not isinstance(raw_source_id, str):
+            die(f"{label}.id must be a string")
+        source_id = safe_model_source_id(raw_source_id, f"{label}.id")
+        alias = unicodedata.normalize("NFC", source_id).casefold()
+        if alias in aliases:
+            die(f"{label}.id is not portable-unique: {source_id!r}")
+        aliases.add(alias)
+        if value.get("provider") != "huggingface":
+            die(f'{label}.provider must be exactly "huggingface"')
+        repo_id = value.get("repo_id")
+        if not isinstance(repo_id, str) or not is_safe_model_repo_id(repo_id):
+            die(f"{label}.repo_id must be a safe Hugging Face repository id")
+        raw_destination = value.get("destination")
+        if not isinstance(raw_destination, str):
+            die(f"{label}.destination must be a string")
+        if raw_destination != raw_destination.strip():
+            die(f"{label}.destination must not have leading or trailing whitespace")
+        destination = safe_relative_path(raw_destination, f"{label}.destination", allow_dot=True)
+        checks = value.get("checks")
+        if not isinstance(checks, list) or not checks:
+            die(f"{label}.checks must be a non-empty array")
+        safe_checks: list[str] = []
+        for check_index, check in enumerate(checks):
+            if not isinstance(check, str):
+                die(f"{label}.checks[{check_index}] must be a string")
+            if check != check.strip():
+                die(f"{label}.checks[{check_index}] must not have leading or trailing whitespace")
+            safe_checks.append(safe_relative_path(check, f"{label}.checks[{check_index}]"))
+        source: dict[str, object] = {
+            "id": source_id,
+            "provider": "huggingface",
+            "repo_id": repo_id,
+            "destination": destination,
+            "checks": safe_checks,
+        }
+        revision = value.get("revision")
+        if revision is not None:
+            if not isinstance(revision, str):
+                die(f"{label}.revision must be a string")
+            source["revision"] = safe_revision(revision, f"{label}.revision")
+        for field in ("include_prefixes", "skip_prefixes"):
+            prefixes = value.get(field)
+            if prefixes is None:
+                continue
+            if not isinstance(prefixes, list):
+                die(f"{label}.{field} must be an array")
+            safe_prefixes: list[str] = []
+            for prefix_index, prefix in enumerate(prefixes):
+                if not isinstance(prefix, str):
+                    die(f"{label}.{field}[{prefix_index}] must be a string")
+                if prefix != prefix.strip():
+                    die(f"{label}.{field}[{prefix_index}] must not have leading or trailing whitespace")
+                safe_prefixes.append(
+                    safe_relative_path(
+                        prefix, f"{label}.{field}[{prefix_index}]", allow_trailing_slash=True
+                    )
+                )
+            source[field] = safe_prefixes
+        includes = source.get("include_prefixes", [])
+        skips = source.get("skip_prefixes", [])
+        for check in safe_checks:
+            if includes and not any(check.startswith(prefix) for prefix in includes):
+                die(f"{label}.checks entry {check!r} is excluded by include_prefixes")
+            if any(check.startswith(prefix) for prefix in skips):
+                die(f"{label}.checks entry {check!r} is excluded by skip_prefixes")
+        for check in safe_checks:
+            target = check if destination == "." else f"{destination}/{check}"
+            target_alias = unicodedata.normalize("NFC", target).casefold()
+            previous = check_targets.get(target_alias)
+            if previous is not None:
+                die(f"model source checks collide at {target!r}: {previous!r} and {source_id!r}")
+            check_targets[target_alias] = source_id
+        sources.append(source)
+    return sources
 
 
 def markdown_inline(value: str) -> str:
@@ -213,16 +358,19 @@ def build_manifest(args: argparse.Namespace, node_id: str, node_name: str) -> di
         "source": args.source,
     }
     if args.kind == "model":
-        node.update(
-            {
-                "hf_repo": args.hf_repo,
-                "download_check": args.download_check,
-            }
-        )
-        if args.include_prefix:
-            node["hf_include_prefixes"] = args.include_prefix
-        if args.skip_prefix:
-            node["hf_skip_prefixes"] = args.skip_prefix
+        if args.model_contract == "legacy":
+            node.update(
+                {
+                    "hf_repo": args.hf_repo,
+                    "download_check": args.download_check,
+                }
+            )
+            if args.include_prefix:
+                node["hf_include_prefixes"] = args.include_prefix
+            if args.skip_prefix:
+                node["hf_skip_prefixes"] = args.skip_prefix
+        else:
+            node["model_sources"] = args.model_sources
         manifest["generator_class"] = generator_class(args.id)
     elif args.kind == "process-python":
         manifest["entry"] = "processor.py"
@@ -249,10 +397,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--node-name")
     parser.add_argument("--input", choices=("image", "text", "mesh"))
     parser.add_argument("--output", choices=("image", "text", "mesh"))
+    parser.add_argument(
+        "--model-contract",
+        choices=("legacy", "model-sources"),
+        default="legacy",
+        help="Model weight contract. legacy remains the compatibility default.",
+    )
     parser.add_argument("--hf-repo")
     parser.add_argument("--download-check")
     parser.add_argument("--include-prefix", action="append", default=[])
     parser.add_argument("--skip-prefix", action="append", default=[])
+    parser.add_argument(
+        "--model-source",
+        action="append",
+        default=[],
+        metavar="JSON",
+        help=(
+            "Repeat for each model-sources entry; JSON requires id, provider=huggingface, "
+            "repo_id, destination, and non-empty checks"
+        ),
+    )
     parser.add_argument(
         "--dependency",
         action="append",
@@ -274,20 +438,35 @@ def main(argv: list[str] | None = None) -> int:
     args.upstream = absolute_https_url(args.upstream, "upstream")
     if not SEMVER_RE.fullmatch(args.version):
         die(f"version must be SemVer: {args.version!r}")
-    if args.kind == "model" and (not args.hf_repo or not args.download_check):
-        die("model scaffolds require --hf-repo and --download-check")
     if args.kind == "model":
-        if not HF_REPO_RE.fullmatch(args.hf_repo):
-            die("hf-repo must be exactly <owner>/<repo>")
-        args.download_check = safe_relative_path(args.download_check, "download-check")
-        args.include_prefix = [
-            safe_relative_path(value, "include-prefix", allow_trailing_slash=True)
-            for value in args.include_prefix
-        ]
-        args.skip_prefix = [
-            safe_relative_path(value, "skip-prefix", allow_trailing_slash=True)
-            for value in args.skip_prefix
-        ]
+        legacy_args = bool(args.hf_repo or args.download_check or args.include_prefix or args.skip_prefix)
+        if args.model_contract == "legacy":
+            if args.model_source:
+                die("legacy model scaffolds do not accept --model-source")
+            if not args.hf_repo or not args.download_check:
+                die("legacy model scaffolds require --hf-repo and --download-check")
+            if not HF_REPO_RE.fullmatch(args.hf_repo):
+                die("hf-repo must be exactly <owner>/<repo>")
+            args.download_check = safe_relative_path(args.download_check, "download-check")
+            args.include_prefix = [
+                safe_relative_path(value, "include-prefix", allow_trailing_slash=True)
+                for value in args.include_prefix
+            ]
+            args.skip_prefix = [
+                safe_relative_path(value, "skip-prefix", allow_trailing_slash=True)
+                for value in args.skip_prefix
+            ]
+            args.model_sources = []
+        else:
+            if legacy_args:
+                die("model-sources scaffolds cannot mix legacy --hf-repo/download/prefix arguments")
+            if not args.model_source:
+                die("model-sources scaffolds require at least one --model-source JSON object")
+            args.model_sources = parse_model_sources(args.model_source)
+    elif args.model_source or args.hf_repo or args.download_check or args.include_prefix or args.skip_prefix:
+        die("weight-source arguments are supported only for --kind model")
+    else:
+        args.model_sources = []
 
     args.input = args.input or ("image" if args.kind == "model" else "mesh")
     args.output = args.output or "mesh"
@@ -311,6 +490,43 @@ def main(argv: list[str] | None = None) -> int:
     manifest = build_manifest(args, node_id, node_name)
     write_text(target, "manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
 
+    if args.kind == "model" and args.model_contract == "model-sources":
+        required_model_files = [
+            check if source["destination"] == "." else f'{source["destination"]}/{check}'
+            for source in args.model_sources
+            for check in source["checks"]
+        ]
+        model_weights = "\n".join(
+            [
+                "- Contract: `model_sources` (next Modly release; merged in `lightningpixel/modly#275`)",
+                f"- Node root: `models/{args.id}/{node_id}/`",
+            ]
+            + [
+                f'- `{source["id"]}`: `{source["repo_id"]}` → '
+                f'`{source["destination"]}`; checks: '
+                + ", ".join(f'`{check}`' for check in source["checks"])
+                for source in args.model_sources
+            ]
+        )
+        model_source_notices = "\n".join(
+            f'- `{source["id"]}` repository: `{source["repo_id"]}`; revision: '
+            f'`{source.get("revision", "not pinned")}`'
+            for source in args.model_sources
+        )
+    else:
+        required_model_files = [args.download_check] if args.kind == "model" else []
+        model_weights = "\n".join(
+            [
+                "- Contract: legacy `hf_repo` / `download_check`",
+                f"- Hugging Face repository: `{args.hf_repo or 'Not applicable'}`",
+                f"- Download sentinel: `{args.download_check or 'Not applicable'}`",
+                f"- Modly location: `models/{args.id}/{node_id}/`",
+            ]
+        )
+        model_source_notices = (
+            f"- Repository: `{args.hf_repo}`" if args.kind == "model" else "- Not applicable"
+        )
+
     values = {
         "EXTENSION_ID": args.id,
         "EXTENSION_NAME": markdown_inline(args.name),
@@ -332,6 +548,9 @@ def main(argv: list[str] | None = None) -> int:
         "EXTENSION_ID_PY": repr(args.id),
         "EXTENSION_NAME_PY": repr(args.name),
         "DOWNLOAD_CHECK_PY": repr(args.download_check or ""),
+        "REQUIRED_MODEL_FILES_PY": repr(required_model_files),
+        "MODEL_WEIGHTS": model_weights,
+        "MODEL_SOURCE_NOTICES": model_source_notices,
         "NODE_ID_PY": repr(node_id),
         "NODE_ID_JS": json.dumps(node_id, ensure_ascii=False),
     }
@@ -368,7 +587,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Created Modly {args.kind} scaffold at {target}")
     validator = SKILL_ROOT / "scripts" / "validate_extension.py"
     print("Next: replace every REPLACE_ME marker and implement the adapter, then run:")
-    print(f'  "{sys.executable}" "{validator}" "{target}" --strict')
+    contract_arg = f" --model-contract {args.model_contract}" if args.kind == "model" else ""
+    print(f'  "{sys.executable}" "{validator}" "{target}" --strict{contract_arg}')
     return 0
 
 

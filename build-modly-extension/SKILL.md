@@ -21,6 +21,8 @@ Collect or infer these facts before writing code:
 - canonical extension id, display name, repository URL, creator name/handle, version, and description
 - upstream repository, pinned revision or release, model repository, licenses, supported platforms, Python range, GPU/VRAM needs, inputs, outputs, and parameters
 - target Modly repository/version or fork
+- model-weight contract: `legacy` for v0.4-era releases or `model-sources` for a
+  build containing merged PR #275
 - one concrete smoke-test input and expected artifact
 
 Never infer authorship or licensing from code ownership. Keep extension creator, upstream author, model-weight owner, and Modly creator as separate credits. If creator identity or license is unresolved, stop before publishing but continue with reversible research and implementation.
@@ -32,7 +34,11 @@ Never infer authorship or licensing from code ownership. Keep extension creator,
 3. Inspect at least one current extension of the same type and one edge-case extension with similar dependencies.
 4. Record facts, inferences, unsupported fields, and host-version differences. Do not copy fields merely because another manifest contains them.
 
-For upstream Modly v0.4 behavior, read `$SKILL_DIR/references/modly-contract.md`. For source provenance and known contradictions, read `$SKILL_DIR/references/source-audit.md`. Re-audit when the target commit differs materially.
+For upstream Modly v0.4 behavior, read `$SKILL_DIR/references/modly-contract.md`.
+For the next-release node-level multi-repository contract, read
+`$SKILL_DIR/references/model-sources-contract.md`. For source provenance and
+known contradictions, read `$SKILL_DIR/references/source-audit.md`. Re-audit
+when the target commit differs materially.
 
 ## Select the runtime route
 
@@ -46,7 +52,7 @@ Prefer a process extension for post-processing or non-model workflow transforms.
 
 ## Scaffold once
 
-Use the bundled scaffold only as a starting point:
+Choose the target contract before scaffolding. Legacy remains the default:
 
 ```bash
 python3 "$SKILL_DIR/scripts/scaffold_extension.py" \
@@ -60,8 +66,30 @@ python3 "$SKILL_DIR/scripts/scaffold_extension.py" \
   --license-name "MIT" \
   --upstream-license "Apache-2.0" \
   --weights-license "Apache-2.0" \
+  --model-contract legacy \
   --hf-repo "owner/model-repo" \
   --download-check "model.safetensors" \
+  --output-dir "<absolute-new-extension-directory>"
+```
+
+For a Modly build containing merged PR #275, use `model-sources` and repeat one
+JSON object per Hugging Face repository:
+
+```bash
+python3 "$SKILL_DIR/scripts/scaffold_extension.py" \
+  --kind model \
+  --id example-model \
+  --name "Example Model" \
+  --author "Creator Name" \
+  --source "https://github.com/owner/example-modly-extension" \
+  --description "Generate a textured mesh from one image." \
+  --upstream "https://github.com/upstream/project" \
+  --license-name "MIT" \
+  --upstream-license "Apache-2.0" \
+  --weights-license "Apache-2.0" \
+  --model-contract model-sources \
+  --model-source '{"id":"primary","provider":"huggingface","repo_id":"owner/main","revision":"immutable-tag-or-commit","destination":".","checks":["model.safetensors"]}' \
+  --model-source '{"id":"encoder","provider":"huggingface","repo_id":"owner/encoder","revision":"immutable-tag-or-commit","destination":"auxiliary/encoder","checks":["model.safetensors"]}' \
   --output-dir "<absolute-new-extension-directory>"
 ```
 
@@ -89,15 +117,28 @@ For JavaScript processes, let Modly run `npm install --omit=dev`; put runtime pa
 
 ## Make weights UI-managed
 
-For every model node:
+Select exactly one weight contract per model node:
 
-1. Declare one `hf_repo` that contains every runtime weight needed by that node.
-2. Declare a stable relative `download_check` inside the node model directory.
-3. Use prefix-only `hf_include_prefixes`/`hf_skip_prefixes` when needed; do not use glob syntax.
-4. Load only from the `model_dir` passed to the generator. Use local-only upstream APIs and disable implicit cache downloads.
-5. Raise an actionable missing-weights error directing the user to the Modly Models UI.
+- `legacy`: declare one `hf_repo`, one stable relative `download_check`, and
+  optional prefix-only `hf_include_prefixes`/`hf_skip_prefixes`. If several
+  repositories are essential, document that this host contract cannot satisfy
+  the design; do not hide downloads in runtime code.
+- `model-sources`: declare a non-empty node-level `model_sources` array. Every
+  entry needs a unique id, `provider: "huggingface"`, `repo_id`, a safe
+  destination, and non-empty checks. Pin `revision`; add prefix filters only
+  when verified. This contract is available only in a build containing merged
+  PR #275, not in the v0.4-era stable contract.
 
-Expect `<MODELS_DIR>/<extension-id>/<node-id>/`; never reconstruct or hard-code it. If one node needs several Hugging Face repositories, publish a compliant composite repository or document that the current UI contract cannot satisfy the design. Do not hide supplementary downloads in `load()`.
+Do not mix the forms on one node. Do not invent `provider: "github"`; the
+merged downloader supports only Hugging Face. A GitHub repository may provide
+pinned source code during setup when licenses permit, but setup must never use
+it to fetch model weights.
+
+Expect `<MODELS_DIR>/<extension-id>/<node-id>/`; never reconstruct or hard-code
+it. Load every source only from `model_dir/<destination>` using local-only APIs,
+and raise an actionable missing-weights error directing the user to the Modly
+Models UI. Read `$SKILL_DIR/references/model-sources-contract.md` for path,
+collision, readiness, cancellation, and guided migration rules.
 
 The upstream UI exposes this download flow only for top-level `type: "model"`. A process that needs model weights cannot meet the UI-managed requirement on stable v0.4; split the design or target and verify a host extension that adds that capability.
 
@@ -138,11 +179,20 @@ Use the attribution distinctions in `$SKILL_DIR/references/authorship.md`. Devel
 
 ## Validate in layers
 
-Run static validation first:
+Run static validation first. State the intended model contract explicitly when
+shipping a model extension:
 
 ```bash
-python3 "$SKILL_DIR/scripts/validate_extension.py" "<absolute-extension-directory>" --strict
+python3 "$SKILL_DIR/scripts/validate_extension.py" "<absolute-extension-directory>" \
+  --strict --model-contract legacy
+
+python3 "$SKILL_DIR/scripts/validate_extension.py" "<absolute-extension-directory>" \
+  --strict --model-contract model-sources
 ```
+
+Use only the command matching the target release. `--model-contract auto` is
+useful for auditing mixed repositories, but release validation should be
+explicit.
 
 Add `--allow-io video,audio` only when the audited target fork supports those types. Also add `--allow-nonstandard-model-io` when that fork changes the model runner beyond image-to-GLB. For a process, exercise the actual IPC entry:
 

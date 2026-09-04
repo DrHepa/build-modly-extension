@@ -51,6 +51,9 @@ jobs:
           python "$SKILL_DIR/scripts/validate_extension.py" --help >/dev/null
           python "$SKILL_DIR/scripts/test_process_protocol.py" --help >/dev/null
 
+      - name: Test legacy and model-sources contracts
+        run: python -m unittest discover -s build-modly-extension/tests -v
+
       - name: Generate all extension routes from outside the skill directory
         run: |
           export SKILL_DIR="$PWD/build-modly-extension"
@@ -70,6 +73,22 @@ jobs:
             --hf-repo "example/model" \
             --download-check "model.safetensors" \
             --output-dir "$RUNNER_TEMP/model"
+
+          python "$SKILL_DIR/scripts/scaffold_extension.py" \
+            --kind model \
+            --id ci-multi-source-model \
+            --name "CI Multi-Source Model" \
+            --author "CI" \
+            --source "https://github.com/example/ci-multi-source-model" \
+            --description "CI multi-source model scaffold." \
+            --upstream "https://github.com/example/upstream" \
+            --license-name MIT \
+            --upstream-license MIT \
+            --weights-license MIT \
+            --model-contract model-sources \
+            --model-source '{"id":"primary","provider":"huggingface","repo_id":"example/model","revision":"0123456789abcdef0123456789abcdef01234567","destination":".","checks":["model.safetensors"]}' \
+            --model-source '{"id":"encoder","provider":"huggingface","repo_id":"example/encoder","revision":"0123456789abcdef0123456789abcdef01234567","destination":"auxiliary/encoder","checks":["model.safetensors"]}' \
+            --output-dir "$RUNNER_TEMP/multi-source-model"
 
           python "$SKILL_DIR/scripts/scaffold_extension.py" \
             --kind process-python \
@@ -107,6 +126,8 @@ jobs:
           for path in (
               root / "model" / "generator.py",
               root / "model" / "setup.py",
+              root / "multi-source-model" / "generator.py",
+              root / "multi-source-model" / "setup.py",
               root / "python-process" / "processor.py",
               root / "python-process" / "setup.py",
           ):

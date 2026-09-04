@@ -2,7 +2,8 @@
 
 ## Contents
 
-- [Minimal model manifest](#minimal-model-manifest)
+- [Minimal legacy model manifest](#minimal-legacy-model-manifest)
+- [Minimal model-sources manifest](#minimal-model-sources-manifest)
 - [Minimal Python process manifest](#minimal-python-process-manifest)
 - [Identity and attribution](#identity-and-attribution)
 - [Nodes and weights](#nodes-and-weights)
@@ -10,7 +11,7 @@
 - [Defaults and coercion](#defaults-and-coercion)
 - [Extra metadata](#extra-metadata)
 
-## Minimal model manifest
+## Minimal legacy model manifest
 
 ```json
 {
@@ -36,6 +37,56 @@
   ]
 }
 ```
+
+Use this form for the v0.4-era stable contract. It represents exactly one
+Hugging Face repository per node.
+
+## Minimal model-sources manifest
+
+```json
+{
+  "id": "example-model",
+  "name": "Example Model",
+  "type": "model",
+  "version": "1.0.0",
+  "author": "Extension Creator",
+  "description": "Generate a mesh from one image.",
+  "source": "https://github.com/creator/example-model-modly-extension",
+  "generator_class": "ExampleModelGenerator",
+  "nodes": [
+    {
+      "id": "generate",
+      "name": "Generate Mesh",
+      "input": "image",
+      "output": "mesh",
+      "model_sources": [
+        {
+          "id": "primary",
+          "provider": "huggingface",
+          "repo_id": "owner/model-repository",
+          "revision": "immutable-tag-or-commit",
+          "destination": ".",
+          "checks": ["model.safetensors"]
+        },
+        {
+          "id": "encoder",
+          "provider": "huggingface",
+          "repo_id": "owner/encoder-repository",
+          "revision": "immutable-tag-or-commit",
+          "destination": "auxiliary/encoder",
+          "checks": ["config.json", "model.safetensors"]
+        }
+      ],
+      "params_schema": []
+    }
+  ]
+}
+```
+
+Use this form only for a Modly build containing merged PR #275. Keep
+`model_sources` on the node, use exactly `provider: "huggingface"`, and do not
+retain legacy `hf_repo`/`download_check` fields beside it. Read
+`model-sources-contract.md` before authoring this form.
 
 ## Minimal Python process manifest
 
@@ -75,8 +126,13 @@
 - Keep `nodes` non-empty; GitHub installation rejects an empty list.
 - Declare `input` and `output` explicitly.
 - Use `inputs` only after verifying the exact target host's multi-input representation. Upstream type declarations use a list of type strings; some community manifests use richer objects that upstream v0.4 does not consume.
-- Put `hf_repo`, `download_check`, and prefix filters on each model node.
-- Keep `download_check` relative and stable across model-repository revisions.
+- Choose one node contract: legacy `hf_repo`/`download_check` and legacy prefix
+  filters, or next-release `model_sources`. Never mix them on one node.
+- For legacy, keep `download_check` relative and stable across repository
+  revisions.
+- For `model_sources`, give every source a safe destination, pinned revision,
+  and non-empty source-relative checks. Only the `huggingface` provider exists
+  in the merged contract.
 - Use a distinct node when weights or behavior are genuinely independent. Remember that every node receives its own model directory.
 
 ## Parameter schema

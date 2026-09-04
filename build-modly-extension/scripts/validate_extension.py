@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Statically validate a Modly model or process extension repository.
 
-The checks target upstream Modly's v0.4-era contract and the stricter policy
-used by build-modly-extension: complete attribution, UI-managed model weights,
+The checks cover both the v0.4-era legacy weight contract and the node-level
+``model_sources`` contract merged for the next Modly release. The stricter
+build-modly-extension policy also requires attribution, UI-managed weights,
 an English operational README, and no unfinished scaffold markers.
 """
 
@@ -14,12 +15,14 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+MODEL_SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 BASE_IO = {"image", "text", "mesh"}
 PARAM_TYPES = {"select", "int", "float", "string"}
@@ -41,6 +44,11 @@ WEIGHT_DOWNLOAD_RE = re.compile(
 )
 GLOB_RE = re.compile(r"[*?\[\]]")
 JS_IDENTIFIER = r"[A-Za-z_$][A-Za-z0-9_$]*"
+WINDOWS_DEVICE_RE = re.compile(
+    r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$", re.IGNORECASE
+)
+WINDOWS_UNSAFE_RE = re.compile(r'[<>"|?*\x00-\x1f]')
+MODEL_CONTRACTS = {"auto", "legacy", "model-sources"}
 
 
 @dataclass(frozen=True)
@@ -107,6 +115,54 @@ def is_safe_relative(value: Any) -> bool:
     normalized = value.replace("\\", "/")
     path = PurePosixPath(normalized)
     return not path.is_absolute() and ".." not in path.parts and "." not in path.parts
+
+
+def portable_alias(value: str) -> str:
+    return unicodedata.normalize("NFC", value).casefold()
+
+
+def is_portable_segment(value: str) -> bool:
+    return not (
+        not value
+        or value in {".", ".."}
+        or value.endswith((".", " "))
+        or ":" in value
+        or WINDOWS_UNSAFE_RE.search(value)
+        or WINDOWS_DEVICE_RE.fullmatch(value)
+    )
+
+
+def is_safe_model_path(value: Any, *, allow_dot: bool = False, prefix: bool = False) -> bool:
+    if not isinstance(value, str) or not value or value != value.strip():
+        return False
+    if allow_dot and value == ".":
+        return True
+    candidate = value[:-1] if prefix and value.endswith("/") else value
+    if not candidate or candidate == "." or candidate.startswith("/") or "\\" in candidate:
+        return False
+    return all(is_portable_segment(part) for part in candidate.split("/"))
+
+
+def is_safe_hf_repo_id(value: Any) -> bool:
+    if not isinstance(value, str) or not value or value != value.strip() or "\\" in value:
+        return False
+    parts = value.split("/")
+    return len(parts) <= 2 and all(
+        part not in {"", ".", ".."} and bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", part))
+        for part in parts
+    )
+
+
+def is_safe_hf_revision(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value == value.strip()
+        and not value.startswith("/")
+        and "\\" not in value
+        and "\0" not in value
+        and all(part not in {"", ".", ".."} for part in value.split("/"))
+    )
 
 
 def json_equal(a: Any, b: Any) -> bool:
@@ -467,47 +523,202 @@ def validate_setup(audit: Audit, required: bool) -> None:
         audit.warning("SETUP_VERIFY", path, "verify required runtime imports/native symbols before reporting success")
 
 
-def validate_model(audit: Audit, manifest: dict[str, Any], nodes: list[dict[str, Any]], manifest_defaults: dict[str, list[Any]]) -> None:
+def validate_legacy_model_weights(audit: Audit, node: dict[str, Any], index: int) -> None:
+    path = f"manifest.json:nodes[{index}]"
+    repo_id = node.get("hf_repo")
+    if not isinstance(repo_id, str) or not repo_id.strip():
+        audit.error("MODEL_HF_REPO", path, "legacy model nodes require hf_repo for UI-managed weights")
+    elif not re.fullmatch(r"[^/\s]+/[^/\s]+", repo_id.strip()):
+        audit.error("MODEL_HF_REPO_FORMAT", path, "hf_repo must be a Hugging Face owner/repository id, not a URL")
+    check = node.get("download_check")
+    if not is_safe_relative(check):
+        audit.error("MODEL_DOWNLOAD_CHECK", path, "download_check must be a safe non-empty relative file/directory path")
+    elif "." not in PurePosixPath(str(check).replace("\\", "/")).name:
+        audit.warning(
+            "MODEL_DOWNLOAD_SENTINEL",
+            path,
+            "download_check looks like a directory; prefer a final, stable, specific file to avoid partial-download false positives",
+        )
+    validate_prefixes(audit, node, index)
+    if isinstance(check, str):
+        include = node.get("hf_include_prefixes") or []
+        skip = node.get("hf_skip_prefixes") or []
+        if isinstance(include, list) and include and not any(
+            isinstance(prefix, str) and check.startswith(prefix) for prefix in include
+        ):
+            audit.error(
+                "MODEL_SENTINEL_NOT_INCLUDED",
+                path,
+                "download_check is excluded by hf_include_prefixes and can never mark the model installed",
+            )
+        if isinstance(skip, list) and any(
+            isinstance(prefix, str) and check.startswith(prefix) for prefix in skip
+        ):
+            audit.error(
+                "MODEL_SENTINEL_SKIPPED",
+                path,
+                "download_check is excluded by hf_skip_prefixes and can never mark the model installed",
+            )
+
+
+def validate_model_sources(audit: Audit, node: dict[str, Any], index: int) -> None:
+    path = f"manifest.json:nodes[{index}]"
+    raw_sources = node.get("model_sources")
+    if not isinstance(raw_sources, list) or not raw_sources:
+        audit.error("MODEL_SOURCES", path, "model_sources must be a non-empty array")
+        return
+
+    source_aliases: dict[str, str] = {}
+    check_targets: dict[str, tuple[str, str]] = {}
+    for source_index, source in enumerate(raw_sources):
+        source_path = f"{path}.model_sources[{source_index}]"
+        if not isinstance(source, dict):
+            audit.error("MODEL_SOURCE_OBJECT", source_path, "model source must be an object")
+            continue
+        source_id = source.get("id")
+        if (
+            not isinstance(source_id, str)
+            or source_id != source_id.strip()
+            or not MODEL_SOURCE_ID_RE.fullmatch(source_id)
+            or not is_portable_segment(source_id)
+        ):
+            audit.error("MODEL_SOURCE_ID", source_path, "id must be a safe non-empty portable identifier")
+        else:
+            alias = portable_alias(source_id)
+            if alias in source_aliases:
+                audit.error(
+                    "MODEL_SOURCE_ID_DUPLICATE",
+                    source_path,
+                    f"source ids {source_aliases[alias]!r} and {source_id!r} are not portable-unique",
+                )
+            source_aliases[alias] = source_id
+
+        if source.get("provider") != "huggingface":
+            audit.error("MODEL_SOURCE_PROVIDER", source_path, 'provider must be exactly "huggingface"')
+        if not is_safe_hf_repo_id(source.get("repo_id")):
+            audit.error("MODEL_SOURCE_REPO", source_path, "repo_id must be a safe Hugging Face repository id")
+        destination = source.get("destination")
+        if not is_safe_model_path(destination, allow_dot=True):
+            audit.error("MODEL_SOURCE_DESTINATION", source_path, "destination must be '.' or a safe relative POSIX path")
+            destination = None
+        if "revision" not in source:
+            audit.warning(
+                "MODEL_SOURCE_REVISION",
+                source_path,
+                "pin revision to an immutable tag or commit for reproducible downloads",
+            )
+        elif not is_safe_hf_revision(source.get("revision")):
+            audit.error("MODEL_SOURCE_REVISION", source_path, "revision must be a safe non-empty Hugging Face revision")
+
+        prefix_values: dict[str, list[str]] = {}
+        for field in ("include_prefixes", "skip_prefixes"):
+            raw_prefixes = source.get(field)
+            if raw_prefixes is None:
+                prefix_values[field] = []
+                continue
+            if not isinstance(raw_prefixes, list):
+                audit.error("MODEL_SOURCE_PREFIX_LIST", source_path, f"{field} must be an array")
+                prefix_values[field] = []
+                continue
+            valid_prefixes: list[str] = []
+            for prefix_index, prefix in enumerate(raw_prefixes):
+                if not is_safe_model_path(prefix, prefix=True):
+                    audit.error(
+                        "MODEL_SOURCE_PREFIX",
+                        source_path,
+                        f"{field}[{prefix_index}] must be a safe relative prefix without glob syntax",
+                    )
+                else:
+                    valid_prefixes.append(prefix)
+            prefix_values[field] = valid_prefixes
+
+        checks = source.get("checks")
+        if not isinstance(checks, list) or not checks:
+            audit.error("MODEL_SOURCE_CHECKS", source_path, "checks must be a non-empty array")
+            continue
+        for check_index, check in enumerate(checks):
+            if not is_safe_model_path(check):
+                audit.error(
+                    "MODEL_SOURCE_CHECK",
+                    source_path,
+                    f"checks[{check_index}] must be a safe relative file path",
+                )
+                continue
+            includes = prefix_values["include_prefixes"]
+            skips = prefix_values["skip_prefixes"]
+            if includes and not any(check.startswith(prefix) for prefix in includes):
+                audit.error(
+                    "MODEL_SOURCE_CHECK_NOT_INCLUDED",
+                    source_path,
+                    f"check {check!r} is excluded by include_prefixes",
+                )
+            if any(check.startswith(prefix) for prefix in skips):
+                audit.error(
+                    "MODEL_SOURCE_CHECK_SKIPPED",
+                    source_path,
+                    f"check {check!r} is excluded by skip_prefixes",
+                )
+            if isinstance(destination, str) and isinstance(source_id, str):
+                target = check if destination == "." else f"{destination}/{check}"
+                alias = portable_alias(target)
+                for previous_alias, (previous_source, previous_target) in check_targets.items():
+                    if previous_source == source_id:
+                        continue
+                    if (
+                        alias == previous_alias
+                        or alias.startswith(f"{previous_alias}/")
+                        or previous_alias.startswith(f"{alias}/")
+                    ):
+                        audit.error(
+                            "MODEL_SOURCE_CHECK_COLLISION",
+                            source_path,
+                            f"portable check target collision: {previous_target!r} and {target!r}",
+                        )
+                check_targets[alias] = (source_id, target)
+
+
+def validate_model_weight_contract(
+    audit: Audit,
+    manifest: dict[str, Any],
+    nodes: list[dict[str, Any]],
+    model_contract: str,
+) -> None:
+    if "model_sources" in manifest:
+        audit.error("MODEL_SOURCES_TOP_LEVEL", "manifest.json", "model_sources must be declared on a model node")
+    legacy_fields = {"hf_repo", "download_check", "hf_skip_prefixes", "hf_include_prefixes"}
+    for index, node in enumerate(nodes):
+        path = f"manifest.json:nodes[{index}]"
+        has_sources = "model_sources" in node
+        present_legacy = sorted(field for field in legacy_fields if field in node)
+        if has_sources and present_legacy:
+            audit.error(
+                "MODEL_CONTRACT_MIXED",
+                path,
+                "do not mix model_sources with legacy fields: " + ", ".join(present_legacy),
+            )
+        if model_contract == "legacy" and has_sources:
+            audit.error("MODEL_CONTRACT_TARGET", path, "target contract is legacy but node declares model_sources")
+        if model_contract == "model-sources" and not has_sources:
+            audit.error("MODEL_CONTRACT_TARGET", path, "target contract is model-sources but node uses legacy fields")
+
+        if has_sources:
+            validate_model_sources(audit, node, index)
+        else:
+            validate_legacy_model_weights(audit, node, index)
+
+
+def validate_model(
+    audit: Audit,
+    manifest: dict[str, Any],
+    nodes: list[dict[str, Any]],
+    manifest_defaults: dict[str, list[Any]],
+    model_contract: str,
+) -> None:
     manifest_path = audit.root / "manifest.json"
     class_name = manifest.get("generator_class")
     if not isinstance(class_name, str) or not class_name.strip():
         audit.error("MODEL_GENERATOR_CLASS", manifest_path, "model requires generator_class")
-    for index, node in enumerate(nodes):
-        path = f"manifest.json:nodes[{index}]"
-        repo_id = node.get("hf_repo")
-        if not isinstance(repo_id, str) or not repo_id.strip():
-            audit.error("MODEL_HF_REPO", path, "every model node requires hf_repo for UI-managed weights")
-        elif not re.fullmatch(r"[^/\s]+/[^/\s]+", repo_id.strip()):
-            audit.error("MODEL_HF_REPO_FORMAT", path, "hf_repo must be a Hugging Face owner/repository id, not a URL")
-        check = node.get("download_check")
-        if not is_safe_relative(check):
-            audit.error("MODEL_DOWNLOAD_CHECK", path, "download_check must be a safe non-empty relative file/directory path")
-        elif "." not in PurePosixPath(str(check).replace("\\", "/")).name:
-            audit.warning(
-                "MODEL_DOWNLOAD_SENTINEL",
-                path,
-                "download_check looks like a directory; prefer a final, stable, specific file to avoid partial-download false positives",
-            )
-        validate_prefixes(audit, node, index)
-        if isinstance(check, str):
-            include = node.get("hf_include_prefixes") or []
-            skip = node.get("hf_skip_prefixes") or []
-            if isinstance(include, list) and include and not any(
-                isinstance(prefix, str) and check.startswith(prefix) for prefix in include
-            ):
-                audit.error(
-                    "MODEL_SENTINEL_NOT_INCLUDED",
-                    path,
-                    "download_check is excluded by hf_include_prefixes and can never mark the model installed",
-                )
-            if isinstance(skip, list) and any(
-                isinstance(prefix, str) and check.startswith(prefix) for prefix in skip
-            ):
-                audit.error(
-                    "MODEL_SENTINEL_SKIPPED",
-                    path,
-                    "download_check is excluded by hf_skip_prefixes and can never mark the model installed",
-                )
+    validate_model_weight_contract(audit, manifest, nodes, model_contract)
 
     path = audit.root / "generator.py"
     text = read_text(audit, path)
@@ -670,8 +881,10 @@ def validate_package_json(audit: Audit, entry: Path) -> None:
 
 def validate_process(audit: Audit, manifest: dict[str, Any], nodes: list[dict[str, Any]]) -> None:
     manifest_path = audit.root / "manifest.json"
+    if "model_sources" in manifest:
+        audit.error("PROCESS_UI_WEIGHTS", manifest_path, "model_sources is supported only on model nodes")
     for index, node in enumerate(nodes):
-        if node.get("hf_repo") or node.get("download_check"):
+        if node.get("hf_repo") or node.get("download_check") or "model_sources" in node:
             audit.error(
                 "PROCESS_UI_WEIGHTS",
                 f"manifest.json:nodes[{index}]",
@@ -747,6 +960,7 @@ def validate_extension(
     root: Path,
     allowed_extra_io: set[str],
     allow_nonstandard_model_io: bool = False,
+    model_contract: str = "auto",
 ) -> Audit:
     root = root.expanduser().resolve()
     audit = Audit(root)
@@ -774,7 +988,7 @@ def validate_extension(
     )
     manifest_defaults = validate_params(audit, nodes)
     if kind == "model":
-        validate_model(audit, manifest, nodes, manifest_defaults)
+        validate_model(audit, manifest, nodes, manifest_defaults, model_contract)
     elif kind == "process":
         validate_process(audit, manifest, nodes)
     validate_readme(audit, manifest, kind)
@@ -795,6 +1009,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Acknowledge a verified host fork whose model runner is not image-to-GLB",
     )
+    parser.add_argument(
+        "--model-contract",
+        choices=sorted(MODEL_CONTRACTS),
+        default="auto",
+        help="Require legacy or model-sources nodes, or infer each node in auto mode",
+    )
     parser.add_argument("--strict", action="store_true", help="Treat warnings as validation failures")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     args = parser.parse_args(argv)
@@ -803,7 +1023,12 @@ def main(argv: list[str] | None = None) -> int:
     if invalid:
         parser.error(f"invalid --allow-io values: {sorted(invalid)}")
 
-    audit = validate_extension(args.extension, extra_io, args.allow_nonstandard_model_io)
+    audit = validate_extension(
+        args.extension,
+        extra_io,
+        args.allow_nonstandard_model_io,
+        args.model_contract,
+    )
     rank = {"error": 0, "warning": 1, "info": 2}
     issues = sorted(audit.issues, key=lambda issue: (rank[issue.severity], issue.path, issue.code, issue.message))
     counts = {severity: sum(issue.severity == severity for issue in issues) for severity in ("error", "warning", "info")}

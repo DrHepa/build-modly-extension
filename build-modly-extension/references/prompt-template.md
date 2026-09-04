@@ -18,6 +18,8 @@ FUENTES
 - Repositorio upstream: [URL]
 - Revisión/release upstream que debe quedar fijada: [TAG O COMMIT]
 - Repositorio de pesos en Hugging Face, si aplica: [OWNER/REPO]
+- Contrato de pesos: [legacy | model-sources]
+- Fuentes de modelo por nodo, si usa model-sources: [id, repo_id, revision, destination, checks y filtros de cada fuente]
 - Licencia del wrapper: [LICENCIA]
 - Licencia del código upstream: [LICENCIA]
 - Licencia/restricciones de los pesos: [LICENCIA Y RESTRICCIONES]
@@ -37,12 +39,25 @@ REQUISITOS OBLIGATORIOS
 2. Audita el código upstream, su instalación, inferencia, serialización, dependencias nativas, pesos y licencias. Fija revisiones reproducibles.
 3. Crea en la raíz del repo todos los archivos necesarios: manifest.json, setup.py, generator.py para model o processor.py/processor.js para process, README.md en inglés, licencia/avisos y pruebas útiles.
 4. setup.py solo prepara el entorno aislado <extension>/venv. Debe aceptar el JSON actual de Modly y los argumentos posicionales heredados, ser reparable/idempotente, verificar imports y fallar con mensajes accionables. No debe descargar pesos.
-5. Los pesos se descargan exclusivamente desde la UI de Modly. Declara por nodo hf_repo, download_check y filtros de prefijo válidos. Deben terminar en models/<extension-id>/<node-id>/ y el runtime solo puede cargar desde model_dir, sin descargas implícitas ni cachés globales.
+5. Los pesos se descargan exclusivamente desde la UI de Modly. Selecciona un
+   solo contrato por nodo: `legacy` con `hf_repo`, `download_check` y filtros de
+   prefijo; o `model-sources` con una lista no vacía de fuentes Hugging Face,
+   revisiones fijadas, destinos seguros y checks. No mezcles contratos ni
+   inventes un proveedor GitHub. Todo debe terminar bajo
+   models/<extension-id>/<node-id>/ y el runtime solo puede cargar desde
+   model_dir/destination, sin descargas implícitas ni cachés globales.
 6. El manifest debe incluir autoría real del creador del wrapper, source apuntando al repo de la extensión, nodes[] no vacío, tipos/valores/defaults compatibles con la UI y generator_class o entry correcto. Separa autor del wrapper, upstream, pesos y Modly en los créditos.
 7. Para model, implementa correctamente load/generate/unload, progreso, cancelación, coerción de parámetros, salida existente y liberación de memoria. Para process Python, respeta el protocolo NDJSON; para JS, exporta la función CommonJS esperada.
 8. El README debe estar en inglés e incluir Install from GitHub, descarga separada de pesos, uso, parámetros, outputs, requisitos, compatibilidad realmente probada, limitaciones, Repair/troubleshooting, upstream fijado, créditos y licencias.
 9. No dejes TODO, REPLACE_ME, mocks, funciones no implementadas, rutas personales, ramas mutables, hashes falsos ni afirmaciones de compatibilidad sin prueba.
-10. Ejecuta el validador incluido en `$SKILL_DIR/scripts/validate_extension.py` con `--strict`, las pruebas del protocolo si es process, instalación limpia, Repair, renderizado de parámetros, descarga desde UI al path exacto y al menos una ejecución real mínima. Resuelve `SKILL_DIR` desde la carpeta de la skill cargada, no desde el proyecto. Si no puedes ejecutar una fase por hardware o acceso, no la simules: indica el nivel alcanzado y entrega el comando/fixture exacto pendiente.
+10. Ejecuta el validador incluido en `$SKILL_DIR/scripts/validate_extension.py`
+    con `--strict` y `--model-contract legacy|model-sources` para modelos, las
+    pruebas del protocolo si es process, instalación limpia, Repair,
+    renderizado de parámetros, descarga desde UI al path exacto y al menos una
+    ejecución real mínima. Resuelve `SKILL_DIR` desde la carpeta de la skill
+    cargada, no desde el proyecto. Si no puedes ejecutar una fase por hardware
+    o acceso, no la simules: indica el nivel alcanzado y entrega el
+    comando/fixture exacto pendiente.
 
 ENTREGA
 - Repositorio completo y limpio.
@@ -55,5 +70,5 @@ ENTREGA
 ## Variante corta
 
 ```text
-Usa $build-modly-extension para convertir [URL UPSTREAM] en una extensión [model/process-python/process-js] de Modly, creada por [AUTOR] en [REPO EXTENSIÓN]. Audita el Modly objetivo [COMMIT], implementa setup/manifest/runtime/README inglés, mantén los pesos [HF_REPO] gestionados exclusivamente por la UI en models/<extension-id>/<node-id>/, valida Install from GitHub + Repair + parámetros + una ejecución real, y no dejes placeholders ni afirmaciones no probadas.
+Usa $build-modly-extension para convertir [URL UPSTREAM] en una extensión [model/process-python/process-js] de Modly, creada por [AUTOR] en [REPO EXTENSIÓN]. Audita el Modly objetivo [COMMIT], selecciona el contrato de pesos [legacy/model-sources], implementa setup/manifest/runtime/README inglés, mantén todas las fuentes gestionadas exclusivamente por la UI bajo models/<extension-id>/<node-id>/, valida Install from GitHub + Repair + parámetros + una ejecución real, y no dejes placeholders ni afirmaciones no probadas.
 ```

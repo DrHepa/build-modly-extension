@@ -16,7 +16,10 @@ under the MIT License.
 - Model `generator.py`, Python `processor.py`, and JavaScript `processor.js`
   templates.
 - UI-managed Hugging Face weight rules using
-  `models/<extension-id>/<node-id>/`.
+  `models/<extension-id>/<node-id>/`, covering both the v0.4-era legacy
+  contract and next-release node-level `model_sources`.
+- A guided migration from legacy or custom auxiliary downloads to multiple
+  Hugging Face sources without repackaging weights.
 - English extension README templates with installation, usage, compatibility,
   troubleshooting, credits, and license sections.
 - Strict checks for unsafe paths, mutable dependencies, unfinished licenses,
@@ -65,8 +68,9 @@ root.
 
 - Python 3.10 or newer for the bundled scaffold, validator, and protocol tools.
 - Node.js only when testing JavaScript process extensions.
-- The bundled contract reference targets the Modly v0.4-era implementation.
-  Re-audit Modly whenever a different release, commit, or fork is targeted.
+- The bundled references retain the Modly v0.4-era legacy contract and add the
+  `model_sources` contract merged in PR #275 for the next release. Select the
+  installed host contract explicitly and re-audit other commits or forks.
 
 ## Usage
 
@@ -94,6 +98,11 @@ python3 "$SKILL_DIR/scripts/scaffold_extension.py" --help
 python3 "$SKILL_DIR/scripts/validate_extension.py" --help
 python3 "$SKILL_DIR/scripts/test_process_protocol.py" --help
 ```
+
+Model scaffolding defaults to `--model-contract legacy`. Use
+`--model-contract model-sources` plus repeated `--model-source` JSON objects
+only when targeting a Modly build that contains merged PR #275. The validator
+supports `legacy`, `model-sources`, and audit-only `auto` modes.
 
 Scaffolds intentionally contain implementation markers. A scaffold is not a
 finished extension, and the strict validator rejects it until the adapter,

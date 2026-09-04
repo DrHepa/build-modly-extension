@@ -8,7 +8,10 @@
 4. Current community extension with similar dependencies.
 5. README prose and historical examples.
 
-Audit date: 2026-07-12. Primary upstream snapshot: `lightningpixel/modly@d45577a3a119c2fdf9336e599a5eb0a40a7d2768`.
+Legacy audit date: 2026-07-12. Primary stable snapshot:
+`lightningpixel/modly@d45577a3a119c2fdf9336e599a5eb0a40a7d2768`.
+The node-level `model_sources` supplement was audited on 2026-09-04 from
+merged PR #275 (`7f7e5b3ae290159036c031315e45b0d9bd33f5eb`).
 
 ## Primary code sources
 
@@ -25,6 +28,14 @@ Audit date: 2026-07-12. Primary upstream snapshot: `lightningpixel/modly@d45577a
 - Process runner/protocol: https://github.com/lightningpixel/modly/blob/d45577a3a119c2fdf9336e599a5eb0a40a7d2768/electron/main/process-runner.ts
 - UI extension and parameter types: https://github.com/lightningpixel/modly/blob/d45577a3a119c2fdf9336e599a5eb0a40a7d2768/src/shared/types/electron.d.ts
 - Conditional parameter rendering: https://github.com/lightningpixel/modly/blob/d45577a3a119c2fdf9336e599a5eb0a40a7d2768/src/areas/workflows/nodes/ExtensionNode.tsx
+
+Next-release model-source sources:
+
+- Merged change and review history: https://github.com/lightningpixel/modly/pull/275
+- Source normalization/readiness: https://github.com/lightningpixel/modly/blob/7f7e5b3ae290159036c031315e45b0d9bd33f5eb/api/services/model_sources.py
+- Installed manifest download plan: https://github.com/lightningpixel/modly/blob/7f7e5b3ae290159036c031315e45b0d9bd33f5eb/electron/main/model-download-plan.ts
+- Electron source validation: https://github.com/lightningpixel/modly/blob/7f7e5b3ae290159036c031315e45b0d9bd33f5eb/electron/main/model-sources.ts
+- Contract tests: https://github.com/lightningpixel/modly/blob/7f7e5b3ae290159036c031315e45b0d9bd33f5eb/api/tests/test_model_sources.py
 
 Representative extensions:
 
@@ -58,6 +69,13 @@ Community/fork extensions declare text-to-image, image-to-video, audio, and rich
 Some generators retain automatic download fallbacks or setup scripts that fetch model assets. The current UI has an explicit Hugging Face downloader and the requested policy is UI-only weights. Decision: prohibit weight downloads in setup/load/generate and verify local-only loading.
 
 The download control is rendered only for top-level model extensions. A Python/JS process that declares `hf_repo` still receives no download button or `MODELS_DIR` payload. Decision: reject process designs that claim UI-managed weights on stable v0.4; split the design or audit a newer host capability.
+
+Merged PR #275 adds a node-level `model_sources` array for multiple Hugging
+Face repositories. It preserves legacy behavior when that field is absent and
+supports only `provider: "huggingface"`. Decision: keep legacy as the scaffold
+default, require an explicit target contract for release validation, forbid
+mixing forms on one node, and provide a guided migration that removes custom
+auxiliary downloads.
 
 ### Prefix filters
 

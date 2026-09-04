@@ -2,6 +2,11 @@
 
 Use this reference for upstream `lightningpixel/modly` at commit `d45577a3a119c2fdf9336e599a5eb0a40a7d2768` (v0.4-era code). Re-audit a different target version or fork.
 
+This is the retained legacy contract. For node-level downloads from multiple
+Hugging Face repositories in a build containing merged PR #275, use
+`model-sources-contract.md`. Do not use fields from that contract in an older
+Modly release.
+
 ## Contents
 
 - [Install from GitHub](#install-from-github)
@@ -101,7 +106,12 @@ file.startswith(prefix)
 
 Do not use `*`, `?`, character classes, or gitignore syntax. An include list is a whitelist; skip prefixes are then excluded.
 
-The UI supports a Hugging Face token from Modly settings. A node has one `hf_repo`. Multi-repository runtime weights are not representable as one current UI download. The download control is rendered only for top-level model extensions; process nodes do not receive it and do not receive `MODELS_DIR` in their runtime payload.
+The UI supports a Hugging Face token from Modly settings. Under this legacy
+contract a node has one `hf_repo`; multi-repository runtime weights are not
+representable as one UI download. Do not add hidden auxiliary downloads to work
+around the limitation. The download control is rendered only for top-level
+model extensions; process nodes do not receive it and do not receive
+`MODELS_DIR` in their runtime payload.
 
 ## Process runtime
 

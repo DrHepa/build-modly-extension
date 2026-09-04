@@ -20,9 +20,14 @@ class @@GENERATOR_CLASS@@(BaseGenerator):
     MODEL_ID = @@EXTENSION_ID_PY@@
     DISPLAY_NAME = @@EXTENSION_NAME_PY@@
     VRAM_GB = 0  # REPLACE_ME with the measured minimum recommendation
+    REQUIRED_MODEL_FILES = @@REQUIRED_MODEL_FILES_PY@@
 
     def is_downloaded(self) -> bool:
-        return (self.model_dir / @@DOWNLOAD_CHECK_PY@@).exists()
+        return all(
+            (self.model_dir / relative).is_file()
+            and (self.model_dir / relative).stat().st_size > 0
+            for relative in self.REQUIRED_MODEL_FILES
+        )
 
     def load(self) -> None:
         if self._model is not None:
